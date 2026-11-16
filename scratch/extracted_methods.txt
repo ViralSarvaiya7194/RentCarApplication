@@ -1,0 +1,386 @@
+845:           ...optimistic.filter(opt => !normalizedRentals.some(nr => nr.carId === opt.carId || nr.carNo === opt.carNo)),
+846:           ...normalizedRentals
+847:         ];
+848: 
+849:         this.rentals.set(mergedRentals);
+850:         this.cars.set(sortedCars);
+851:         this.updateStats();
+852:         this.loading.set(false);
+853:       },
+854:       error: (err) => {
+855:         console.error('Error loading fleet data:', err);
+856:         this.api.getCars().subscribe({
+857:           next: (cars) => {
+858:             if (cars && cars.length > 0) {
+859:               const sorted = cars.slice().sort((a, b) => {
+860:                 const numA = parseInt(String(a.carNo || '0').replace(/\D/g, ''), 10) || 0;
+861:                 const numB = parseInt(String(b.carNo || '0').replace(/\D/g, ''), 10) || 0;
+862:                 if (numA !== numB) return numA - numB;
+863:                 return String(a.carNo || '').localeCompare(String(b.carNo || ''));
+864:               });
+865:               this.cars.set(sorted);
+866:               this.updateStats();
+867:             }
+868:             this.loading.set(false);
+869:           },
+870:           error: () => this.loading.set(false)
+871:         });
+872:       }
+873:     });
+874: 
+875:     if (this.models().length === 0) {
+876:       this.api.getCarModels().subscribe({
+877:         next: (models) => this.models.set(models || [])
+878:       });
+879:     }
+880: 
+881:     this.api.getRates().subscribe({
+882:       next: (rates) => this.rates.set(rates || [])
+883:     });
+884: 
+885:     this.api.getGracePeriods().subscribe({
+886:       next: (gps) => {
+887:         if (gps && gps.length > 0) {
+888:           const activeGp = gps.find(g => g.status === 'ACTIVE' || g.status === 'Available');
+889:           if (activeGp && activeGp.minutes !== undefined) {
+890:             this.gracePeriodMinutes.set(Number(activeGp.minutes));
+891:           }
+892:         }
+893:       }
+894:     });
+895:   }
+896: 
+897:   /**
+898:    * Cross-references active rentals with cars to guarantee 100% consistent state
+899:    */
+900:   syncFleetStatuses() {
+901:     const activeList = this.rentals().filter(r => r.status === 'ACTIVE' || !r.status);
+902:     const activeCarIds = new Set(activeList.map(r => String(r.carId || r.car_id || '')));
+903:     const activeCarNos = new Set(activeList.map(r => String(r.carNo || r.car_no || '')));
+904:     const activeCleanNums = new Set(activeList.map(r => String(r.carNo || r.car_no || r.carId || r.car_id || '').replace(/\D/g, '')).filter(Boolean));
+905: 
+906:     const currentCars = this.cars();
+907:     let hasChanged = false;
+908:     const updated = currentCars.map(c => {
+909:       const cId = String(c.id || '');
+910:       const cNo = String(c.carNo || c.car_no || '');
+911:       const cClean = cNo.replace(/\D/g, '') || cId.replace(/\D/g, '');
+912:       const isRented = activeCarIds.has(cId) || activeCarNos.has(cNo) || (cClean && activeCleanNums.has(cClean));
+913:       const targetStatus = isRented ? 'Rented' : (c.status === 'Rented' && activeList.length > 0 ? 'Available' : (c.status || 'Available'));
+914:       if (c.status !== targetStatus) {
+915:         hasChanged = true;
+916:         return { ...c, status: targetStatus };
+917:       }
+918:       return c;
+919:     });
+920: 
+921:     if (hasChanged) {
+922:       this.cars.set(updated);
+923:     }
+924:     this.updateStats();
+925:   }
+926: 
+927:   updateStats() {
+928:     const all = this.cars();
+929:     this.availableCount.set(all.filter(c => !this.isCarRented(c)).length);
+930:     this.rentedCount.set(all.filter(c => this.isCarRented(c)).length);
+931:   }
+932: 
+933:   displayedCars(type: string) {
+934:     return this.cars()
+935:       .filter(c => {
+936:         const isSingle = (c.model || '').toLowerCase().includes('single');
+937:         if (type === 'SINGLE') return isSingle;
+938:         if (type === 'DOUBLE') return !isSingle;
+939:         return true;
+940:       })
+941:       .sort((a, b) => {
+942:         const numA = parseInt(String(a.carNo || a.car_no || '0').replace(/\D/g, ''), 10) || 0;
+943:         const numB = parseInt(String(b.carNo || b.car_no || '0').replace(/\D/g, ''), 10) || 0;
+944:         if (numA !== numB) return numA - numB;
+945:         return String(a.carNo || a.car_no || '').localeCompare(String(b.carNo || b.car_no || ''));
+946:       });
+947:   }
+948: 
+949:   getActiveRental(carOrIdOrNo: any): any {
+950: 
+951:     const cleanNum = targetNo.replace(/\D/g, '') || targetId.replace(/\D/g, '');
+952: 
+953:     return this.rentals().find(r => {
+954:       if (r.status && r.status !== 'ACTIVE') return false;
+955:       const rId = String(r.id || '').trim();
+956:       const rInvoice = String(r.invoice_no || r.invoiceNo || '').trim();
+957:       const rCarId = String(r.car_id || r.carId || '').trim();
+958:       const rCarNo = String(r.car_no || r.carNo || '').trim();
+959:       const rCleanNum = rCarNo.replace(/\D/g, '') || rCarId.replace(/\D/g, '');
+960: 
+961:       // 1. Direct identifier matches
+962:       if (targetId && (rCarId.toLowerCase() === targetId.toLowerCase() || rCarNo.toLowerCase() === targetId.toLowerCase() || rId === targetId || rInvoice === targetId)) {
+963:         return true;
+964:       }
+965:       if (targetNo && (rCarNo.toLowerCase() === targetNo.toLowerCase() || rCarId.toLowerCase() === targetNo.toLowerCase())) {
+966:         return true;
+967:       }
+968:       // 2. Numeric car number match (e.g. '76' matches 'CAR-076')
+969:       if (cleanNum && rCleanNum && cleanNum === rCleanNum) {
+970:         return true;
+971:       }
+972:       return false;
+973:     }) || null;
+974:   }
+975: 
+976:   isCarRented(car: any): boolean {
+977:     if (!car) return false;
+978:     if (car.status === 'Rented') return true;
+979:     return !!this.getActiveRental(car);
+980:   }
+981: 
+982:   getRentalStartTime(carOrId: any): Date {
+983:     const r = this.getActiveRental(carOrId);
+984:     if (!r) return new Date();
+985:     const raw = r.start_time || r.startTime;
+986:     if (!raw) return new Date();
+987:     if (raw instanceof Date) return raw;
+988:     const d = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw);
+989:     return isNaN(d.getTime()) ? new Date() : d;
+990:   }
+991: 
+992:   /**
+993:    * Returns live timer formatted as HH:mm:ss
+994:    */
+995:   getRentalDuration(carOrId: any): string {
+996:     const r = this.getActiveRental(carOrId);
+997:     if (!r) return '00:00:00';
+998:     const raw = r.start_time || r.startTime;
+999:     const start = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : (raw || new Date())).getTime();
+1000:     if (isNaN(start)) return '00:00:00';
+1001:     const diffSec = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 1000));
+1002:     const hrs = Math.floor(diffSec / 3600).toString().padStart(2, '0');
+1003:     const mins = Math.floor((diffSec % 3600) / 60).toString().padStart(2, '0');
+1004:     const secs = (diffSec % 60).toString().padStart(2, '0');
+1005:     return `${hrs}:${mins}:${secs}`;
+1006:   }
+1007: 
+1008:   /**
+1009:    * Returns human-readable elapsed duration (e.g. 1 hr 25 mins or 45 mins)
+1010:    */
+1011:   getFormattedTotalDuration(carOrId: any): string {
+1012:     const r = this.getActiveRental(carOrId);
+1013:     if (!r) return '0 min';
+1014:     const raw = r.start_time || r.startTime;
+1015:     const start = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : (raw || new Date())).getTime();
+1016:     if (isNaN(start)) return '0 min';
+1017:     const diffMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+1018:     const hrs = Math.floor(diffMins / 60);
+1019:     const mins = diffMins % 60;
+1020:     if (hrs > 0) {
+1021:       return `${hrs} hr${hrs > 1 ? 's' : ''} ${mins} min${mins !== 1 ? 's' : ''}`;
+1022:     }
+1023:     return `${mins} min${mins !== 1 ? 's' : ''}`;
+1024:   }
+1025: 
+1026:   /**
+1027:    * Finds matching active rate record from PostgreSQL
+1028:    */
+1029:   getMatchingRateObject(carOrRental?: any): any {
+1030:     const target = carOrRental || this.selectedCar();
+1031:     if (!target) return null;
+1032: 
+1033:     const r = this.getActiveRental(target);
+1034:     const modelName = String(target.model || r?.model || '').trim().toLowerCase();
+1035:     const modelId = String(target.model_id || target.modelId || r?.model_id || r?.modelId || '').trim();
+1036:     const activeRates = this.rates().filter(rt => (rt.status === 'ACTIVE' || rt.status === 'Available' || !rt.status));
+1037: 
+1038:     // 1. Match by modelId and duration 60
+1039:     let match = activeRates.find(rt => 
+1040:       modelId && (rt.model_id === modelId || rt.modelId === modelId) && Number(rt.duration) === 60
+1041:     );
+1042: 
+1043:     // 2. Match by modelId any duration
+1044:     if (!match && modelId) {
+1045:       match = activeRates.find(rt => rt.model_id === modelId || rt.modelId === modelId);
+1046:     }
+1047: 
+1048:     // 3. Match by exact model name and duration 60
+1049:     if (!match && modelName) {
+1050:       modelId && (rt.model_id === modelId || rt.modelId === modelId) && Number(rt.duration) === 60
+1051:     );
+1052: 
+1053:     // 2. Match by modelId any duration
+1054:     if (!match && modelId) {
+1055:       match = activeRates.find(rt => rt.model_id === modelId || rt.modelId === modelId);
+1056:     }
+1057: 
+1058:     // 3. Match by exact model name and duration 60
+1059:     if (!match && modelName) {
+1060:       match = activeRates.find(rt => 
+1061:         rt.model && String(rt.model).trim().toLowerCase() === modelName && Number(rt.duration) === 60
+1062:       );
+1063:     }
+1064: 
+1065:     // 4. Match by exact model name any duration
+1066:     if (!match && modelName) {
+1067:       match = activeRates.find(rt => 
+1068:         rt.model && String(rt.model).trim().toLowerCase() === modelName
+1069:       );
+1070:     }
+1071: 
+1072:     // 5. Fuzzy match by 'double' vs 'single'
+1073:     if (!match) {
+1074:       const isDouble = modelName.includes('double');
+1075:       match = activeRates.find(rt => {
+1076:         const m = String(rt.model || '').toLowerCase();
+1077:         return isDouble ? m.includes('double') : m.includes('single');
+1078:       });
+1079:     }
+1080: 
+1081:     return match || null;
+1082:   }
+1083: 
+1084:   /**
+1085:    * Retrieves base hourly rental rate from Database:
+1086:    * Single Seater: 1.000 KD (from DB)
+1087:    * Double Seater: 2.000 KD (from DB)
+1088:    */
+1089:   getCarBaseRate(carOrRental?: any): number {
+1090:     const target = carOrRental || this.selectedCar();
+1091:     if (!target) return 1.000;
+1092: 
+1093:     const match = this.getMatchingRateObject(target);
+1094:     if (match && match.amount !== undefined && match.amount !== null) {
+1095:       const amt = Number(match.amount);
+1096:       if (!isNaN(amt) && amt > 0) {
+1097:         return amt;
+1098:       }
+1099:     }
+1100: 
+1101:     // Fallback if DB rate record not yet loaded: Double Seater is 2 KD, Single Seater is 1 KD
+1102:     const r = this.getActiveRental(target);
+1103:     const modelName = String(target.model || r?.model || '').trim().toLowerCase();
+1104:     const isDouble = modelName.includes('double');
+1105:     return isDouble ? 2.000 : 1.000;
+1106:   }
+1107: 
+1108:   /**
+1109:    * Pricing Calculation based on Database Rates:
+1110:    * - Within grace period: 0.000 KD
+1111:    * - Crossed grace period (1st hour): Base rate from DB (1 KD for Single, 2 KD for Double)
+1112:    * - Subsequent hours after 1st hour: 50% of base rate per hour (0.500 KD for Single, 1.000 KD for Double)
+1113:    */
+1114:   calculateRate(): number {
+1115:     const car = this.selectedCar();
+1116:     if (!car) return 0;
+1117:     const r = this.getActiveRental(car);
+1118:     if (!r) return 0;
+1119: 
+1120:     const start = new Date(r.start_time || r.startTime).getTime();
+1121:     const elapsedMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+1122:     const grace = Number(this.gracePeriodMinutes() || 10);
+1123: 
+1124:     // Rule 1: Within initial grace period -> 0 KD
+1125:     if (elapsedMins <= grace) {
+1126:       return 0.000;
+1127:     }
+1128: 
+1129:     const baseRate = this.getCarBaseRate(car);
+1130:     const extraRatePerHour = baseRate * 0.5;
+1131: 
+1132:     // Rule 2: First hour (up to 60 minutes + grace period) -> Base rate from DB
+1133:     if (elapsedMins <= 60 + grace) {
+1134:       return baseRate;
+1135:     }
+1136: 
+1137:     // Rule 3: After first hour crossed + grace period -> Base rate + extra hours charge
+1138:     const extraMins = elapsedMins - 60 - grace;
+1139:     const extraHours = Math.floor(extraMins / 60) + 1; // Ceil of additional hours
+1140:     return baseRate + (extraHours * extraRatePerHour);
+1141:   }
+1142: 
+1143:   /**
+1144:    * Detailed rate breakdown for UI display
+1145:    */
+1146:   getRateBreakdown(): { base: number; extra: number; extraRate: number; extraHours: number; isWithinGrace: boolean; graceMins: number } {
+1147:     const car = this.selectedCar();
+1148:     const defaultGrace = Number(this.gracePeriodMinutes() || 10);
+1149:     if (!car) return { base: 0, extra: 0, extraRate: 0.500, extraHours: 0, isWithinGrace: false, graceMins: defaultGrace };
+1150:     const r = this.getActiveRental(car);
+1151:     if (!r) return { base: 0, extra: 0, extraRate: 0.500, extraHours: 0, isWithinGrace: false, graceMins: defaultGrace };
+1152: 
+1153:     const start = new Date(r.start_time || r.startTime).getTime();
+1154:     const elapsedMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+1155:     const grace = defaultGrace;
+1156: 
+1157:     const baseRate = this.getCarBaseRate(car);
+1158:     const extraRatePerHour = baseRate * 0.5;
+1159: 
+1160:     if (elapsedMins <= grace) {
+1161:       return { base: baseRate, extra: 0, extraRate: extraRatePerHour, extraHours: 0, isWithinGrace: true, graceMins: grace };
+1162:     }
+1163: 
+1164:     if (elapsedMins <= 60 + grace) {
+1165:       return { base: baseRate, extra: 0, extraRate: extraRatePerHour, extraHours: 0, isWithinGrace: false, graceMins: grace };
+1166:     }
+1167: 
+1168:     const extraMins = elapsedMins - 60 - grace;
+1169:     const extraHours = Math.floor(extraMins / 60) + 1;
+1170:     return { base: baseRate, extra: extraHours * extraRatePerHour, extraRate: extraRatePerHour, extraHours, isWithinGrace: false, graceMins: grace };
+1171:   }
+1172: 
+1173:   /**
+1174:    * Discount Master Change Handler
+1175:    * - 50% Discount for Customers with Disabilities = 50%
+1176:    */
+1177:   onDiscountMasterChange(type: 'NONE' | 'DISABILITY_50') {
+1178:     this.selectedDiscountMaster = type;
+1179:     if (type === 'NONE') {
+1180:       this.manualDiscountValue = 0;
+1181:     } else if (type === 'DISABILITY_50') {
+1182:       this.manualDiscountValue = 50;
+1183:     }
+1184:   }
+1185: 
+1186:   /**
+1187:    * Calculate effective discount based on Master Dropdown selection
+1188:    */
+1189:   calculateEffectiveDiscount(): number {
+1190:     const rate = this.calculateRate();
+1191:     if (rate <= 0) return 0;
+1192: 
+1193:     if (this.selectedDiscountMaster === 'NONE') {
+1194:       return 0;
+1195:     } else if (this.selectedDiscountMaster === 'DISABILITY_50') {
+1196:       // 50% discount for customers with disabilities
+1197:       return (rate * 50) / 100;
+1198:     }
+1199:     return 0;
+1200:   }
+1201: 
+1202:   finalCharge(): number {
+1203:     return Math.max(0, this.calculateRate() - this.calculateEffectiveDiscount());
+1204:   }
+1205: 
+1206:   getDepositPaid(): number {
+1207:     const car = this.selectedCar();
+1208:     if (!car) return 0;
+1209:     const r = this.getActiveRental(car);
+1210:     return Number(r?.deposit_amount ?? r?.depositAmount ?? r?.rental_amount ?? r?.rentalAmount ?? this.depositAmount ?? 10);
+1211:   }
+1212: 
+1213:   isRefundToCustomer(): boolean {
+1214:     return this.getDepositPaid() >= this.finalCharge();
+1215:   }
+1216: 
+1217:   finalChangeToReturn(): number {
+1218:     const deposit = this.getDepositPaid();
+1219:     const charge = this.finalCharge();
+1220:     return Math.max(0, deposit - charge);
+1221:   }
+1222: 
+1223:   finalAmountDue(): number {
+1224:     const deposit = this.getDepositPaid();
+1225:     const charge = this.finalCharge();
+1226:     return Math.max(0, charge - deposit);
+1227:   }
+1228: 
+1229:   handleCarClick(car: any) {
+1230:     if (!car) return;

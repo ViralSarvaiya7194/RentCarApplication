@@ -1,0 +1,366 @@
+const fs = require('fs');
+const path = require('path');
+
+const posFile = path.resolve(__dirname, '../src/app/pos.ts');
+let content = fs.readFileSync(posFile, 'utf8');
+
+// 1. Remove this.isCarSwapModalOpen.set(false); in closeModal()
+content = content.replace(/\s*this\.isCarSwapModalOpen\.set\(false\);/, '');
+
+// 2. Define the missing methods block
+const missingMethods = `
+  /**
+   * Cross-references active rentals with cars to guarantee 100% consistent state
+   */
+  syncFleetStatuses() {
+    const activeList = this.rentals().filter(r => r.status === 'ACTIVE' || !r.status);
+    const activeCarIds = new Set(activeList.map(r => String(r.carId || r.car_id || '')));
+    const activeCarNos = new Set(activeList.map(r => String(r.carNo || r.car_no || '')));
+    const activeCleanNums = new Set(activeList.map(r => String(r.carNo || r.car_no || r.carId || r.car_id || '').replace(/\\D/g, '')).filter(Boolean));
+
+    const currentCars = this.cars();
+    let hasChanged = false;
+    const updated = currentCars.map(c => {
+      const cId = String(c.id || '');
+      const cNo = String(c.carNo || c.car_no || '');
+      const cClean = cNo.replace(/\\D/g, '') || cId.replace(/\\D/g, '');
+      const isRented = activeCarIds.has(cId) || activeCarNos.has(cNo) || (cClean && activeCleanNums.has(cClean));
+      const targetStatus = isRented ? 'Rented' : (c.status === 'Rented' && activeList.length > 0 ? 'Available' : (c.status || 'Available'));
+      if (c.status !== targetStatus) {
+        hasChanged = true;
+        return { ...c, status: targetStatus };
+      }
+      return c;
+    });
+
+    if (hasChanged) {
+      this.cars.set(updated);
+    }
+    this.updateStats();
+  }
+
+  updateStats() {
+    const all = this.cars();
+    this.availableCount.set(all.filter(c => !this.isCarRented(c)).length);
+    this.rentedCount.set(all.filter(c => this.isCarRented(c)).length);
+  }
+
+  displayedCars(type: string) {
+    return this.cars()
+      .filter(c => {
+        const isSingle = (c.model || '').toLowerCase().includes('single');
+        if (type === 'SINGLE') return isSingle;
+        if (type === 'DOUBLE') return !isSingle;
+        return true;
+      })
+      .sort((a, b) => {
+        const numA = parseInt(String(a.carNo || a.car_no || '0').replace(/\\D/g, ''), 10) || 0;
+        const numB = parseInt(String(b.carNo || b.car_no || '0').replace(/\\D/g, ''), 10) || 0;
+        if (numA !== numB) return numA - numB;
+        return String(a.carNo || a.car_no || '').localeCompare(String(b.carNo || b.car_no || ''));
+      });
+  }
+
+  getActiveRental(carOrIdOrNo: any): any {
+    if (!carOrIdOrNo) return null;
+    let targetId = '';
+    let targetNo = '';
+    if (typeof carOrIdOrNo === 'object') {
+      targetId = String(carOrIdOrNo.id || carOrIdOrNo.car_id || carOrIdOrNo.carId || '').trim();
+      targetNo = String(carOrIdOrNo.carNo || carOrIdOrNo.car_no || '').trim();
+    } else {
+      targetId = String(carOrIdOrNo).trim();
+      targetNo = targetId;
+    }
+
+    const cleanNum = targetNo.replace(/\\D/g, '') || targetId.replace(/\\D/g, '');
+
+    return this.rentals().find(r => {
+      if (r.status && r.status !== 'ACTIVE') return false;
+      const rId = String(r.id || '').trim();
+      const rInvoice = String(r.invoice_no || r.invoiceNo || '').trim();
+      const rCarId = String(r.car_id || r.carId || '').trim();
+      const rCarNo = String(r.car_no || r.carNo || '').trim();
+      const rCleanNum = rCarNo.replace(/\\D/g, '') || rCarId.replace(/\\D/g, '');
+
+      // 1. Direct identifier matches
+      if (targetId && (rCarId.toLowerCase() === targetId.toLowerCase() || rCarNo.toLowerCase() === targetId.toLowerCase() || rId === targetId || rInvoice === targetId)) {
+        return true;
+      }
+      if (targetNo && (rCarNo.toLowerCase() === targetNo.toLowerCase() || rCarId.toLowerCase() === targetNo.toLowerCase())) {
+        return true;
+      }
+      // 2. Numeric car number match (e.g. '76' matches 'CAR-076')
+      if (cleanNum && rCleanNum && cleanNum === rCleanNum) {
+        return true;
+      }
+      return false;
+    }) || null;
+  }
+
+  isCarRented(car: any): boolean {
+    if (!car) return false;
+    if (car.status === 'Rented') return true;
+    return !!this.getActiveRental(car);
+  }
+
+  getRentalStartTime(carOrId: any): Date {
+    const r = this.getActiveRental(carOrId);
+    if (!r) return new Date();
+    const raw = r.start_time || r.startTime;
+    if (!raw) return new Date();
+    if (raw instanceof Date) return raw;
+    const d = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw);
+    return isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  /**
+   * Returns live timer formatted as HH:mm:ss
+   */
+  getRentalDuration(carOrId: any): string {
+    const r = this.getActiveRental(carOrId);
+    if (!r) return '00:00:00';
+    const raw = r.start_time || r.startTime;
+    const start = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : (raw || new Date())).getTime();
+    if (isNaN(start)) return '00:00:00';
+    const diffSec = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 1000));
+    const hrs = Math.floor(diffSec / 3600).toString().padStart(2, '0');
+    const mins = Math.floor((diffSec % 3600) / 60).toString().padStart(2, '0');
+    const secs = (diffSec % 60).toString().padStart(2, '0');
+    return \`\${hrs}:\${mins}:\${secs}\`;
+  }
+
+  /**
+   * Returns human-readable elapsed duration (e.g. 1 hr 25 mins or 45 mins)
+   */
+  getFormattedTotalDuration(carOrId: any): string {
+    const r = this.getActiveRental(carOrId);
+    if (!r) return '0 min';
+    const raw = r.start_time || r.startTime;
+    const start = new Date(typeof raw === 'string' && raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : (raw || new Date())).getTime();
+    if (isNaN(start)) return '0 min';
+    const diffMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+    const hrs = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    if (hrs > 0) {
+      return \`\${hrs} hr\${hrs > 1 ? 's' : ''} \${mins} min\${mins !== 1 ? 's' : ''}\`;
+    }
+    return \`\${mins} min\${mins !== 1 ? 's' : ''}\`;
+  }
+
+  /**
+   * Finds matching active rate record from PostgreSQL
+   */
+  getMatchingRateObject(carOrRental?: any): any {
+    const target = carOrRental || this.selectedCar();
+    if (!target) return null;
+
+    const r = this.getActiveRental(target);
+    const modelName = String(target.model || r?.model || '').trim().toLowerCase();
+    const modelId = String(target.model_id || target.modelId || r?.model_id || r?.modelId || '').trim();
+    const activeRates = this.rates().filter(rt => (rt.status === 'ACTIVE' || rt.status === 'Available' || !rt.status));
+
+    // 1. Match by modelId and duration 60
+    let match = activeRates.find(rt => 
+      modelId && (rt.model_id === modelId || rt.modelId === modelId) && Number(rt.duration) === 60
+    );
+
+    // 2. Match by modelId any duration
+    if (!match && modelId) {
+      match = activeRates.find(rt => rt.model_id === modelId || rt.modelId === modelId);
+    }
+
+    // 3. Match by exact model name and duration 60
+    if (!match && modelName) {
+      match = activeRates.find(rt => 
+        rt.model && String(rt.model).trim().toLowerCase() === modelName && Number(rt.duration) === 60
+      );
+    }
+
+    // 4. Match by exact model name any duration
+    if (!match && modelName) {
+      match = activeRates.find(rt => 
+        rt.model && String(rt.model).trim().toLowerCase() === modelName
+      );
+    }
+
+    // 5. Fuzzy match by 'double' vs 'single'
+    if (!match) {
+      const isDouble = modelName.includes('double');
+      match = activeRates.find(rt => {
+        const m = String(rt.model || '').toLowerCase();
+        return isDouble ? m.includes('double') : m.includes('single');
+      });
+    }
+
+    return match || null;
+  }
+
+  /**
+   * Retrieves base hourly rental rate from Database:
+   * Single Seater: 1.000 KD (from DB)
+   * Double Seater: 2.000 KD (from DB)
+   */
+  getCarBaseRate(carOrRental?: any): number {
+    const target = carOrRental || this.selectedCar();
+    if (!target) return 1.000;
+
+    const match = this.getMatchingRateObject(target);
+    if (match && match.amount !== undefined && match.amount !== null) {
+      const amt = Number(match.amount);
+      if (!isNaN(amt) && amt > 0) {
+        return amt;
+      }
+    }
+
+    // Fallback if DB rate record not yet loaded: Double Seater is 2 KD, Single Seater is 1 KD
+    const r = this.getActiveRental(target);
+    const modelName = String(target.model || r?.model || '').trim().toLowerCase();
+    const isDouble = modelName.includes('double');
+    return isDouble ? 2.000 : 1.000;
+  }
+
+  /**
+   * Pricing Calculation based on Database Rates:
+   * - Within grace period: 0.000 KD
+   * - Crossed grace period (1st hour): Base rate from DB (1 KD for Single, 2 KD for Double)
+   * - Subsequent hours after 1st hour: 50% of base rate per hour (0.500 KD for Single, 1.000 KD for Double)
+   */
+  calculateRate(): number {
+    const car = this.selectedCar();
+    if (!car) return 0;
+    const r = this.getActiveRental(car);
+    if (!r) return 0;
+
+    const start = new Date(r.start_time || r.startTime).getTime();
+    const elapsedMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+    const grace = Number(this.gracePeriodMinutes() || 10);
+
+    // Rule 1: Within initial grace period -> 0 KD
+    if (elapsedMins <= grace) {
+      return 0.000;
+    }
+
+    const baseRate = this.getCarBaseRate(car);
+    const extraRatePerHour = baseRate * 0.5;
+
+    // Rule 2: First hour (up to 60 minutes + grace period) -> Base rate from DB
+    if (elapsedMins <= 60 + grace) {
+      return baseRate;
+    }
+
+    // Rule 3: After first hour crossed + grace period -> Base rate + extra hours charge
+    const extraMins = elapsedMins - 60 - grace;
+    const extraHours = Math.floor(extraMins / 60) + 1; // Ceil of additional hours
+    return baseRate + (extraHours * extraRatePerHour);
+  }
+
+  /**
+   * Detailed rate breakdown for UI display
+   */
+  getRateBreakdown(): { base: number; extra: number; extraRate: number; extraHours: number; isWithinGrace: boolean; graceMins: number } {
+    const car = this.selectedCar();
+    const defaultGrace = Number(this.gracePeriodMinutes() || 10);
+    if (!car) return { base: 0, extra: 0, extraRate: 0.500, extraHours: 0, isWithinGrace: false, graceMins: defaultGrace };
+    const r = this.getActiveRental(car);
+    if (!r) return { base: 0, extra: 0, extraRate: 0.500, extraHours: 0, isWithinGrace: false, graceMins: defaultGrace };
+
+    const start = new Date(r.start_time || r.startTime).getTime();
+    const elapsedMins = Math.max(0, Math.floor((this.currentTime.getTime() - start) / 60000));
+    const grace = defaultGrace;
+
+    const baseRate = this.getCarBaseRate(car);
+    const extraRatePerHour = baseRate * 0.5;
+
+    if (elapsedMins <= grace) {
+      return { base: baseRate, extra: 0, extraRate: extraRatePerHour, extraHours: 0, isWithinGrace: true, graceMins: grace };
+    }
+
+    if (elapsedMins <= 60 + grace) {
+      return { base: baseRate, extra: 0, extraRate: extraRatePerHour, extraHours: 0, isWithinGrace: false, graceMins: grace };
+    }
+
+    const extraMins = elapsedMins - 60 - grace;
+    const extraHours = Math.floor(extraMins / 60) + 1;
+    return { base: baseRate, extra: extraHours * extraRatePerHour, extraRate: extraRatePerHour, extraHours, isWithinGrace: false, graceMins: grace };
+  }
+
+  /**
+   * Discount Master Change Handler
+   * - 50% Discount for Customers with Disabilities = 50%
+   */
+  onDiscountMasterChange(type: 'NONE' | 'DISABILITY_50' | 'CUSTOM') {
+    this.selectedDiscountMaster = type;
+  }
+
+  /**
+   * Calculate effective discount based on Master Dropdown selection
+   */
+  calculateEffectiveDiscount(): number {
+    const rate = this.calculateRate();
+    if (rate <= 0) return 0;
+
+    if (this.selectedDiscountMaster === 'NONE') {
+      return 0;
+    } else if (this.selectedDiscountMaster === 'DISABILITY_50') {
+      // 50% discount for customers with disabilities
+      return (rate * 50) / 100;
+    } else if (this.selectedDiscountMaster === 'CUSTOM') {
+      const mode = this.customDiscountMode();
+      const val = Number(this.customDiscountValue()) || 0;
+      if (val <= 0) return 0;
+      if (mode === 'PERCENT') {
+        return Math.min(rate, (rate * Math.min(100, val)) / 100);
+      } else {
+        return Math.min(rate, val);
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Split Payment Management (Requirement 10)
+   */
+  onPaymentMethodChange(method: 'CASH' | 'KNET' | 'SPLIT') {
+    this.paymentMethod = method;
+    this.updateSplitAmounts();
+  }
+
+  updateSplitAmounts() {
+    const total = this.finalCharge();
+    if (this.paymentMethod === 'SPLIT') {
+      let cash = this.splitCashAmount();
+      if (cash <= 0 || cash > total) {
+        cash = Math.round((total / 2) * 1000) / 1000;
+      }
+      this.splitCashAmount.set(cash);
+      this.splitKnetAmount.set(Math.max(0, Math.round((total - cash) * 1000) / 1000));
+    }
+  }
+
+  onSplitCashChange(val: number) {
+    const total = this.finalCharge();
+    const cash = Math.max(0, Math.min(total, Number(val) || 0));
+    this.splitCashAmount.set(cash);
+    this.splitKnetAmount.set(Math.max(0, Math.round((total - cash) * 1000) / 1000));
+  }
+
+  onSplitKnetChange(val: number) {
+    const total = this.finalCharge();
+    const knet = Math.max(0, Math.min(total, Number(val) || 0));
+    this.splitKnetAmount.set(knet);
+    this.splitCashAmount.set(Math.max(0, Math.round((total - knet) * 1000) / 1000));
+  }
+`;
+
+// Insert missingMethods right before finalCharge(): number {
+const targetStr = '  finalCharge(): number {';
+if (content.includes(targetStr)) {
+  content = content.replace(targetStr, missingMethods + '\n' + targetStr);
+  console.log('Successfully inserted missing methods block before finalCharge()');
+} else {
+  console.error('Could not find finalCharge(): number {');
+}
+
+fs.writeFileSync(posFile, content, 'utf8');
+console.log('Successfully updated pos.ts');

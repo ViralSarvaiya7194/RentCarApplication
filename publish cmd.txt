@@ -1,0 +1,5 @@
+powershell -ExecutionPolicy Bypass -File .\package-iis.ps1
+
+
+atnq dcdp fqht emox
+atnq dcdp fqht emox

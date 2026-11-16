@@ -1,0 +1,50 @@
+import { Routes } from '@angular/router';
+import { PosComponent } from './pos';
+import { CompanyComponent } from './company';
+import { BranchComponent } from './branch';
+import { LocationComponent } from './location';
+import { CarModelComponent } from './car-model';
+import { CarComponent } from './car';
+import { RateComponent } from './rate';
+import { GracePeriodComponent } from './grace-period';
+import { ShiftCloseComponent } from './shift-close';
+import { DayCloseComponent } from './day-close';
+import { LoginComponent } from './login';
+import { UserComponent } from './user';
+import { TranslationsComponent } from './translations';
+import { MasterExportComponent } from './master-export';
+import { BillsComponent } from './bills';
+import { PrinterMasterComponent } from './printer-master';
+import { PrintFormatMasterComponent } from './print-format-master';
+import { UserRightsComponent } from './user-rights';
+import { ReportsComponent } from './reports';
+import { PeriodicReportComponent } from './periodic-report';
+
+export const routes: Routes = [
+  { path: 'login', component: LoginComponent },
+  { path: '', component: PosComponent },
+  { path: 'bills', component: BillsComponent },
+  { path: 'duplicate-bill', redirectTo: 'bills' },
+  { path: 'periodic-report', component: PeriodicReportComponent },
+  { path: 'reports', component: ReportsComponent },
+  { path: 'reports/:tab', component: ReportsComponent },
+  { path: 'company', component: CompanyComponent },
+  { path: 'branch', component: BranchComponent },
+  { path: 'location', component: LocationComponent },
+  { path: 'user', component: UserComponent },
+  { path: 'user-rights', component: UserRightsComponent },
+  { path: 'printer-master', component: PrinterMasterComponent },
+  { path: 'printers', redirectTo: 'printer-master' },
+  { path: 'print-format-master', component: PrintFormatMasterComponent },
+  { path: 'print-formats', redirectTo: 'print-format-master' },
+  { path: 'car-model', component: CarModelComponent },
+  { path: 'car', component: CarComponent },
+  { path: 'rate', component: RateComponent },
+  { path: 'grace-period', component: GracePeriodComponent },
+  { path: 'master-export', component: MasterExportComponent },
+  { path: 'shift-close', component: ShiftCloseComponent },
+  { path: 'day-close', component: DayCloseComponent },
+  { path: 'translations', component: TranslationsComponent },
+  { path: '**', redirectTo: '' }
+];
+
